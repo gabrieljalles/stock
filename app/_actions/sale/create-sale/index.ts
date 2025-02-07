@@ -3,11 +3,13 @@
 import { db } from "@/app/_lib/prisma";
 import { createSaleSchema, CreateSaleSchema } from "./schema";
 import { revalidatePath } from "next/cache";
+import { actionClient } from "@/app/_lib/safe-action";
+import { returnValidationErrors } from "next-safe-action";
 
 //O useo de transaction faz com que ou o código execute tudo, ou desfaça qualquer operação que tenha feito no caminho. Empede de criar uma etapa e ignorar a outra.
-
-export const createSale = async (data: CreateSaleSchema) => {
-  createSaleSchema.parse(data);
+export const createSale = actionClient
+.schema(createSaleSchema)
+.action(async ({parsedInput: {products}}) => {
 
   await db.$transaction(async (trx) => {
     const sale = await trx.sale.create({
@@ -16,7 +18,7 @@ export const createSale = async (data: CreateSaleSchema) => {
       },
     });
 
-    for (const product of data.products) {
+    for (const product of products) {
       const productFromDb = await db.product.findUnique({
         where: {
           id: product.id,
@@ -24,13 +26,17 @@ export const createSale = async (data: CreateSaleSchema) => {
       });
 
       if (!productFromDb) {
-        throw new Error("Produto não encontrado");
+        return returnValidationErrors(createSaleSchema, {
+          _errors: ["Product not found."],
+        })
       }
 
       const productIsOutofStock = productFromDb.stock < product.quantity;
 
       if (productIsOutofStock) {
-        throw new Error("Quantidade pedida ou produto fora de estoque!");
+        return returnValidationErrors(createSaleSchema, {
+          _errors:["Product out of stock."]
+        })
       }
 
       await trx.saleProduct.create({
@@ -54,7 +60,5 @@ export const createSale = async (data: CreateSaleSchema) => {
       });
     }
   });
-
   revalidatePath("/products");
-  revalidatePath("/sales");
-};
+})
